@@ -32,11 +32,11 @@ PATH = 0
 CAR_W = 26
 CAR_H = 18
 
-PLAYER_SPEED = 2.5
 NUM_ENEMIES = 6
 INITIAL_LIVES = 3
 PURSUIT_RANGE = 550
 ENEMY_BASE_SPEED = 1.4
+PLAYER_SPEED = 1.5 * ENEMY_BASE_SPEED
 ENEMY_SPEED_VARIATION = 0.45
 PREDICTION_FACTOR = 5
 ENEMY_NOISE = {'accurate': 0.05, 'medium': 0.30}
@@ -45,6 +45,9 @@ ENEMY_CENTER_THRESHOLD = 6
 ENEMY_STUCK_SNAP = 8
 INVULNERABLE_TIME = 90
 EXPLOSION_DURATION = 30
+SCORE_VALUES = {'wall': 100, 'medium': 200, 'accurate': 300}
+EXIT_SCORE_BASE = 500
+HIGHSCORE_FILE = '.highscore'
 BULLET_SPEED = 7
 BULLET_SIZE = 6
 BULLET_LIFETIME = 50
@@ -86,6 +89,24 @@ def turn_right(d):
 
 def turn_left(d):
     return (d[1], -d[0])
+
+
+# ─── High Score ──────────────────────────────────────────────────────────────
+
+def load_highscore():
+    try:
+        with open(HIGHSCORE_FILE, 'r') as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return 0
+
+
+def save_highscore(score):
+    try:
+        with open(HIGHSCORE_FILE, 'w') as f:
+            f.write(str(score))
+    except OSError:
+        pass
 
 
 # ─── Maze Generation ─────────────────────────────────────────────────────────
@@ -169,8 +190,9 @@ def tile_center(col, row):
 
 
 def pos_to_tile(px, py):
-    return (int((px - MAZE_OFFSET_X) // TILE_SIZE),
-            int((py - MAZE_OFFSET_Y) // TILE_SIZE))
+    col = max(0, min(GRID_COLS - 1, int((px - MAZE_OFFSET_X) // TILE_SIZE)))
+    row = max(0, min(GRID_ROWS - 1, int((py - MAZE_OFFSET_Y) // TILE_SIZE)))
+    return (col, row)
 
 
 def nearest_path_tile(maze, px, py):
@@ -179,8 +201,8 @@ def nearest_path_tile(maze, px, py):
         return col, row
     best = None
     best_dist = float('inf')
-    for dr in range(-2, 3):
-        for dc in range(-2, 3):
+    for dr in range(-4, 5):
+        for dc in range(-4, 5):
             nc, nr = col + dc, row + dr
             if 0 <= nc < GRID_COLS and 0 <= nr < GRID_ROWS and maze[nr][nc] == PATH:
                 cx, cy = tile_center(nc, nr)
@@ -234,7 +256,21 @@ def wall_follower_direction(maze, col, row, direction):
 
 
 def move_enemy_on_grid(enemy, walls, maze):
-    """Move enemy along grid paths, centering on tiles to avoid corner jams."""
+    """Move enemy along grid paths with persistent tile targeting."""
+    if enemy.target_tile is not None:
+        tx, ty = tile_center(*enemy.target_tile)
+        dist = math.hypot(enemy.x - tx, enemy.y - ty)
+        if dist < 2.0:
+            enemy.set_pos(tx, ty)
+            enemy.target_tile = None
+            return True
+        dx = tx - enemy.x
+        dy = ty - enemy.y
+        scale = min(1.0, enemy.speed / dist)
+        old_x, old_y = enemy.x, enemy.y
+        enemy.move(dx * scale, dy * scale, walls)
+        return math.hypot(enemy.x - old_x, enemy.y - old_y) > 0.01
+
     col, row = nearest_path_tile(maze, enemy.x, enemy.y)
     cx, cy = tile_center(col, row)
     d = enemy.direction
@@ -242,8 +278,8 @@ def move_enemy_on_grid(enemy, walls, maze):
     can_advance = (0 <= ncol < GRID_COLS and 0 <= nrow < GRID_ROWS
                    and maze[nrow][ncol] == PATH)
 
-    dist_from_center = math.hypot(enemy.x - cx, enemy.y - cy)
-    if can_advance and dist_from_center <= ENEMY_CENTER_THRESHOLD:
+    if can_advance:
+        enemy.target_tile = (ncol, nrow)
         tx, ty = tile_center(ncol, nrow)
     else:
         tx, ty = cx, cy
@@ -252,9 +288,7 @@ def move_enemy_on_grid(enemy, walls, maze):
     dy = ty - enemy.y
     dist = math.hypot(dx, dy)
     if dist < 0.5:
-        if dist > 0.01:
-            enemy.set_pos(tx, ty)
-        return can_advance and dist_from_center <= ENEMY_CENTER_THRESHOLD
+        return False
 
     scale = min(1.0, enemy.speed / dist)
     old_x, old_y = enemy.x, enemy.y
@@ -266,6 +300,36 @@ def unstuck_enemy(enemy, maze):
     col, row = nearest_path_tile(maze, enemy.x, enemy.y)
     enemy.set_pos(*tile_center(col, row))
     enemy.stuck_frames = 0
+
+
+def move_player_on_grid(player, walls, maze):
+    """Move player along grid, steering toward tile centers."""
+    col, row = nearest_path_tile(maze, player.x, player.y)
+    cx, cy = tile_center(col, row)
+    d = player.direction
+    ncol, nrow = col + d[0], row + d[1]
+    can_advance = (0 <= ncol < GRID_COLS and 0 <= nrow < GRID_ROWS
+                   and maze[nrow][ncol] == PATH)
+
+    if d in (UP, DOWN):
+        off_center = abs(player.x - cx) > 2
+    else:
+        off_center = abs(player.y - cy) > 2
+
+    if off_center:
+        tx, ty = cx, cy
+    elif can_advance:
+        tx, ty = tile_center(ncol, nrow)
+    else:
+        tx, ty = cx, cy
+
+    dx = tx - player.x
+    dy = ty - player.y
+    dist = math.hypot(dx, dy)
+    if dist < 0.5:
+        return
+    scale = min(1.0, player.speed / dist)
+    player.move(dx * scale, dy * scale, walls)
 
 
 # ─── Car ─────────────────────────────────────────────────────────────────────
@@ -286,6 +350,7 @@ class Car:
         self.move_timer = random.randint(0, 60)
         self.move_dur = random.randint(30, 90)
         self.stuck_frames = 0
+        self.target_tile = None
 
     def set_pos(self, x, y):
         self.x, self.y = x, y
@@ -426,7 +491,7 @@ class Bullet:
 
 def main():
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Maze Chase")
+    pygame.display.set_caption("Caça ao Labirinto")
     clock = pygame.time.Clock()
     font = pygame.font.Font(None, 32)
     big_font = pygame.font.Font(None, 72)
@@ -442,6 +507,22 @@ def main():
     # Player
     player = Car(0, 0, PLAYER_COLOR, is_player=True)
 
+    def best_start_direction(px, py):
+        col, row = pos_to_tile(px, py)
+        best_dir, best_count = UP, -1
+        for d in DIRECTIONS:
+            count = 0
+            for step in range(1, 8):
+                nc, nr = col + d[0] * step, row + d[1] * step
+                if 0 <= nc < GRID_COLS and 0 <= nr < GRID_ROWS and maze[nr][nc] == PATH:
+                    count += 1
+                else:
+                    break
+            if count > best_count:
+                best_count = count
+                best_dir = d
+        return best_dir
+
     def spawn_player():
         for _ in range(100):
             x, y = random_path_pos(maze)
@@ -452,12 +533,14 @@ def main():
                     break
             if ok:
                 player.set_pos(x, y)
-                player.direction = UP
+                player.direction = best_start_direction(x, y)
                 return
-        player.set_pos(*random_path_pos(maze))
-        player.direction = UP
+        x, y = random_path_pos(maze)
+        player.set_pos(x, y)
+        player.direction = best_start_direction(x, y)
 
     def spawn_enemy(enemy):
+        enemy.target_tile = None
         for _ in range(100):
             x, y = random_path_pos(maze)
             if math.hypot(x - player.x, y - player.y) < 120:
@@ -480,13 +563,24 @@ def main():
     enemies = [Car(0, 0, ENEMY_COLORS[i % len(ENEMY_COLORS)],
                    behavior=enemy_behaviors[i])
                for i in range(NUM_ENEMIES)]
+
+    def apply_phase_difficulty():
+        speed_mult = 1.0 + 0.15 * (phase - 1)
+        for e in enemies:
+            e.speed = (ENEMY_BASE_SPEED + random.uniform(-ENEMY_SPEED_VARIATION, ENEMY_SPEED_VARIATION)) * speed_mult
+
+    # Game state
+    lives = INITIAL_LIVES
+    score = 0
+    highscore = load_highscore()
+    phase = 1
+
+    apply_phase_difficulty()
     spawn_player()
     for e in enemies:
         spawn_enemy(e)
 
-    # Game state
-    lives = INITIAL_LIVES
-    invulnerable = 0
+    invulnerable = INVULNERABLE_TIME
     explosions = []
     bullets = []
     shoot_cooldown = 0
@@ -494,7 +588,38 @@ def main():
     dist_map = None
     game_over = False
     game_won = False
+    phase_timer = 0
     running = True
+
+    def advance_phase():
+        nonlocal maze, walls, exit_rect, phase_timer, game_won, game_over
+        maze = generate_maze(GRID_COLS, GRID_ROWS)
+        walls = get_wall_rects(maze)
+        exit_x, exit_y = find_exit_pos(maze)
+        exit_rect = pygame.Rect(0, 0, TILE_SIZE, TILE_SIZE)
+        exit_rect.center = (exit_x, exit_y)
+        for e in enemies:
+            e.target_tile = None
+            spawn_enemy(e)
+        spawn_player()
+        apply_phase_difficulty()
+        invulnerable = INVULNERABLE_TIME
+        explosions.clear()
+        bullets.clear()
+        shoot_cooldown = 0
+        bfs_counter = 0
+        dist_map = None
+        game_won = False
+        game_over = False
+        phase_timer = 0
+
+    def reset_game():
+        nonlocal lives, score, phase
+        lives = INITIAL_LIVES
+        score = 0
+        phase = 1
+        advance_phase()
+        highscore = load_highscore()
 
     while running:
         # ── Events ──────────────────────────────────────────────────────
@@ -505,40 +630,30 @@ def main():
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_q:
                     running = False
-                if event.key == pygame.K_r and (game_over or game_won):
-                    maze = generate_maze(GRID_COLS, GRID_ROWS)
-                    walls = get_wall_rects(maze)
-                    exit_x, exit_y = find_exit_pos(maze)
-                    exit_rect = pygame.Rect(0, 0, TILE_SIZE, TILE_SIZE)
-                    exit_rect.center = (exit_x, exit_y)
-                    for e in enemies:
-                        spawn_enemy(e)
-                    spawn_player()
-                    lives = INITIAL_LIVES
-                    invulnerable = 0
-                    explosions.clear()
-                    bullets.clear()
-                    shoot_cooldown = 0
-                    bfs_counter = 0
-                    game_over = False
-                    game_won = False
+                if event.key == pygame.K_c and game_won:
+                    advance_phase()
+                if event.key == pygame.K_r and game_over:
+                    reset_game()
+
+        if game_won and phase_timer > 0:
+            phase_timer -= 1
+            if phase_timer <= 0:
+                advance_phase()
 
         if not game_over and not game_won:
             # ── Player input ────────────────────────────────────────────
             keys = pygame.key.get_pressed()
-            dx = dy = 0.0
             if keys[pygame.K_UP]:
-                dy = -PLAYER_SPEED
+                player.direction = UP
             if keys[pygame.K_DOWN]:
-                dy = PLAYER_SPEED
+                player.direction = DOWN
             if keys[pygame.K_LEFT]:
-                dx = -PLAYER_SPEED
+                player.direction = LEFT
             if keys[pygame.K_RIGHT]:
-                dx = PLAYER_SPEED
-            if dx != 0 and dy != 0:
-                dx *= 0.7071
-                dy *= 0.7071
-            player.move(dx, dy, walls)
+                player.direction = RIGHT
+            dx = player.direction[0] * PLAYER_SPEED
+            dy = player.direction[1] * PLAYER_SPEED
+            move_player_on_grid(player, walls, maze)
             player.vx = dx
             player.vy = dy
 
@@ -551,6 +666,9 @@ def main():
                 shoot_cooldown -= 1
 
             # ── Enemy AI ───────────────────────────────────────────────
+            phase_pursuit = PURSUIT_RANGE + 50 * (phase - 1)
+            phase_noise = max(0.01, 0.05 / (1 + 0.3 * (phase - 1)))
+            phase_medium_noise = max(0.05, 0.30 / (1 + 0.3 * (phase - 1)))
             bfs_counter -= 1
             if bfs_counter <= 0:
                 vx = getattr(player, 'vx', 0)
@@ -575,10 +693,10 @@ def main():
                     enemy.direction = wall_follower_direction(maze, et_x, et_y, enemy.direction)
                 else:
                     dist = math.hypot(enemy.x - player.x, enemy.y - player.y)
-                    noise = ENEMY_NOISE[enemy.behavior]
+                    noise = phase_noise if enemy.behavior == 'accurate' else phase_medium_noise
                     bias = ENEMY_BIAS[enemy.behavior]
 
-                    if dist < PURSUIT_RANGE:
+                    if dist < phase_pursuit:
                         step = choose_bfs_step(tile_neighbors, dist_map, et_x, et_y, noise)
                         if step:
                             enemy.direction = step
@@ -600,11 +718,19 @@ def main():
                     enemy.stuck_frames += 1
                     if enemy.stuck_frames >= ENEMY_STUCK_SNAP:
                         unstuck_enemy(enemy, maze)
+                        enemy.target_tile = None
+                        ncol, nrow = nearest_path_tile(maze, enemy.x, enemy.y)
+                        fresh_neighbors = tile_neighbors_at(maze, ncol, nrow)
                         if enemy.behavior == 'wall':
-                            col, row = nearest_path_tile(maze, enemy.x, enemy.y)
-                            enemy.direction = wall_follower_direction(maze, col, row, enemy.direction)
-                        elif tile_neighbors:
-                            enemy.direction = random.choice(tile_neighbors)
+                            enemy.direction = wall_follower_direction(maze, ncol, nrow, enemy.direction)
+                        elif fresh_neighbors:
+                            enemy.direction = random.choice(fresh_neighbors)
+                    elif enemy.stuck_frames >= 2:
+                        cur_col, cur_row = nearest_path_tile(maze, enemy.x, enemy.y)
+                        alt_dirs = tile_neighbors_at(maze, cur_col, cur_row)
+                        if alt_dirs:
+                            enemy.direction = random.choice(alt_dirs)
+                            enemy.target_tile = None
 
             # ── Collisions ────────────────────────────────────────────
             if invulnerable <= 0:
@@ -633,6 +759,10 @@ def main():
                 for enemy in enemies:
                     if bullet.rect.colliderect(enemy.hitbox):
                         explosions.append(Explosion(enemy.x, enemy.y))
+                        score += SCORE_VALUES.get(enemy.behavior, 100)
+                        if score > highscore:
+                            highscore = score
+                            save_highscore(highscore)
                         spawn_enemy(enemy)
                         hit = True
                         break
@@ -641,6 +771,13 @@ def main():
             bullets = new_bullets
 
             if not game_won and player.hitbox.colliderect(exit_rect):
+                exit_pts = EXIT_SCORE_BASE * phase
+                score += exit_pts
+                if score > highscore:
+                    highscore = score
+                    save_highscore(highscore)
+                phase += 1
+                phase_timer = 10 * FPS
                 game_won = True
 
         # ── Draw ──────────────────────────────────────────────────────────
@@ -662,7 +799,7 @@ def main():
 
         pygame.draw.rect(screen, (0, 180, 60), exit_rect, border_radius=4)
         pygame.draw.rect(screen, (0, 255, 100), exit_rect, 2, border_radius=4)
-        exit_label = font.render("EXIT", True, (255, 255, 255))
+        exit_label = font.render("SAÍDA", True, (255, 255, 255))
         screen.blit(exit_label, exit_label.get_rect(center=exit_rect.center))
 
         for e in enemies:
@@ -681,11 +818,11 @@ def main():
         bar_rect = pygame.Rect(0, 0, SCREEN_WIDTH, MAZE_OFFSET_Y)
         pygame.draw.rect(screen, UI_BG, bar_rect)
 
-        lives_label = font.render("LIVES", True, (180, 180, 180))
-        screen.blit(lives_label, (20, 18))
+        lives_label = font.render("VIDAS", True, (180, 180, 180))
+        screen.blit(lives_label, (20, 10))
         for i in range(INITIAL_LIVES):
-            hx = 100 + i * 34
-            hy = 18
+            hx = 110 + i * 34
+            hy = 12
             if i < lives:
                 pygame.draw.rect(screen, HEART_COLOR, (hx, hy, 26, 22),
                                  border_radius=5)
@@ -695,9 +832,21 @@ def main():
                 pygame.draw.rect(screen, (80, 30, 30), (hx, hy, 26, 22), 1,
                                  border_radius=5)
 
+        phase_text = font.render(f"FASE {phase}", True, (100, 200, 255))
+        screen.blit(phase_text, (SCREEN_WIDTH - 120, 10))
+
+        score_text = font.render(f"PONTOS {score}", True, (255, 220, 50))
+        screen.blit(score_text, (20, 36))
+
+        hi_text = font.render(f"RECORDE {highscore}", True, (180, 180, 180))
+        hi_rect = hi_text.get_rect(center=(SCREEN_WIDTH // 2, 42))
+        screen.blit(hi_text, hi_rect)
+
         if invulnerable > 0:
-            inv_text = font.render("INVULNERABLE", True, (255, 255, 100))
-            screen.blit(inv_text, (SCREEN_WIDTH - 180, 18))
+            inv_text = font.render("─── INVULNERÁVEL ───", True, (255, 255, 100))
+            inv_rect = inv_text.get_rect(center=(SCREEN_WIDTH // 2,
+                                                  MAZE_OFFSET_Y + MAZE_HEIGHT + 20))
+            screen.blit(inv_text, inv_rect)
 
         if game_over:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -705,12 +854,18 @@ def main():
             overlay.fill(BLACK)
             screen.blit(overlay, (0, 0))
 
-            go = big_font.render("GAME OVER", True, (255, 50, 50))
+            go = big_font.render("FIM DE JOGO", True, (255, 50, 50))
             screen.blit(go, go.get_rect(center=(SCREEN_WIDTH // 2,
-                                                 SCREEN_HEIGHT // 2 - 30)))
-            rs = font.render("Press R to restart", True, WHITE)
-            screen.blit(rs, rs.get_rect(center=(SCREEN_WIDTH // 2,
+                                                 SCREEN_HEIGHT // 2 - 50)))
+            sc = font.render(f"Pontos: {score}   Fase: {phase}", True, (255, 220, 50))
+            screen.blit(sc, sc.get_rect(center=(SCREEN_WIDTH // 2,
+                                                 SCREEN_HEIGHT // 2 + 0)))
+            hi = font.render(f"Recorde: {highscore}", True, (180, 180, 180))
+            screen.blit(hi, hi.get_rect(center=(SCREEN_WIDTH // 2,
                                                  SCREEN_HEIGHT // 2 + 30)))
+            rs = font.render("Pressione R para reiniciar", True, WHITE)
+            screen.blit(rs, rs.get_rect(center=(SCREEN_WIDTH // 2,
+                                                 SCREEN_HEIGHT // 2 + 60)))
 
         if game_won:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -718,12 +873,19 @@ def main():
             overlay.fill(BLACK)
             screen.blit(overlay, (0, 0))
 
-            win = big_font.render("YOU WIN!", True, (50, 255, 50))
+            win = big_font.render("FASE COMPLETA!", True, (50, 255, 50))
             screen.blit(win, win.get_rect(center=(SCREEN_WIDTH // 2,
-                                                   SCREEN_HEIGHT // 2 - 30)))
-            rs = font.render("Press R to restart", True, WHITE)
-            screen.blit(rs, rs.get_rect(center=(SCREEN_WIDTH // 2,
+                                                   SCREEN_HEIGHT // 2 - 50)))
+            sc = font.render(f"Pontos: {score}   Próxima: Fase {phase}", True, (255, 220, 50))
+            screen.blit(sc, sc.get_rect(center=(SCREEN_WIDTH // 2,
+                                                 SCREEN_HEIGHT // 2 + 0)))
+            hi = font.render(f"Recorde: {highscore}", True, (180, 180, 180))
+            screen.blit(hi, hi.get_rect(center=(SCREEN_WIDTH // 2,
                                                  SCREEN_HEIGHT // 2 + 30)))
+            secs = max(0, phase_timer // FPS + (1 if phase_timer % FPS else 0))
+            rs = font.render(f"Próxima fase em {secs}s  (C para pular)", True, WHITE)
+            screen.blit(rs, rs.get_rect(center=(SCREEN_WIDTH // 2,
+                                                 SCREEN_HEIGHT // 2 + 60)))
 
         pygame.display.flip()
         clock.tick(FPS)

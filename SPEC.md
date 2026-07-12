@@ -1,7 +1,7 @@
 Write a complete, single-file Python game using Pygame that meets the following requirements:
 
 - 2D top-down view game
-- Player controls a car using arrow keys (up, down, left, right)
+- Player controls a car that always moves forward; arrow keys change direction
 - There is a maze made of walls (use a grid-based maze)
 - Maze grid is 17×17 for greater layout complexity
 - 6 enemy cars that move around the maze, each with a distinct behavior type:
