@@ -184,6 +184,24 @@ def bfs_distance(grid, tx, ty):
     return dist
 
 
+def farthest_path_tile(grid, exit_col, exit_row):
+    dist = bfs_distance(grid, exit_col, exit_row)
+    rows, cols = len(dist), len(dist[0])
+    candidates = []
+    max_dist = 0
+    for ri in range(rows):
+        for ci in range(cols):
+            if dist[ri][ci] > 0:
+                if dist[ri][ci] > max_dist:
+                    max_dist = dist[ri][ci]
+                candidates.append((ci, ri, dist[ri][ci]))
+    if not candidates:
+        return (1, 1)
+    threshold = max_dist * 0.85
+    far = [(c, r) for c, r, d in candidates if d >= threshold]
+    return random.choice(far)
+
+
 def tile_center(col, row):
     return (MAZE_OFFSET_X + col * TILE_SIZE + TILE_SIZE // 2,
             MAZE_OFFSET_Y + row * TILE_SIZE + TILE_SIZE // 2)
@@ -524,18 +542,23 @@ def main():
         return best_dir
 
     def spawn_player():
-        for _ in range(100):
-            x, y = random_path_pos(maze)
-            ok = True
-            for e in enemies:
-                if math.hypot(x - e.x, y - e.y) < 120:
-                    ok = False
-                    break
-            if ok:
-                player.set_pos(x, y)
-                player.direction = best_start_direction(x, y)
-                return
-        x, y = random_path_pos(maze)
+        exit_col, exit_row = pos_to_tile(exit_x, exit_y)
+        far_col, far_row = farthest_path_tile(maze, exit_col, exit_row)
+        x, y = tile_center(far_col, far_row)
+        for e in enemies:
+            if math.hypot(x - e.x, y - e.y) < 120:
+                dist = bfs_distance(maze, exit_col, exit_row)
+                rows, cols = len(dist), len(dist[0])
+                max_d = max(dist[ri][ci] for ri in range(rows) for ci in range(cols) if dist[ri][ci] > 0)
+                threshold = max_d * 0.85
+                far = [(ci, ri) for ri in range(rows) for ci in range(cols) if dist[ri][ci] >= threshold]
+                random.shuffle(far)
+                for fc, fr in far:
+                    tx, ty = tile_center(fc, fr)
+                    if all(math.hypot(tx - e.x, ty - e.y) >= 120 for e in enemies):
+                        x, y = tx, ty
+                        break
+                break
         player.set_pos(x, y)
         player.direction = best_start_direction(x, y)
 

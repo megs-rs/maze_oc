@@ -16,6 +16,12 @@ Requer Python 3 e Pygame (`pip install pygame`).
 - **ESPAÇO** para atirar (pequeno intervalo entre tiros; balas param nas paredes).
 - **Q** para sair a qualquer momento.
 
+## Geração do Labirinto e Posição Inicial
+
+- O jogador inicia na posição mais distante da saída (com ruído de ~15% para variação).
+- BFS calcula todas as distâncias a partir da saída; tiles com distância ≥ 85% do máximo são candidatos.
+- Se o candidato estiver perto de um inimigo, tenta outro tile do mesmo grupo.
+
 ## Pontuação
 
 | Ação | Pontos |

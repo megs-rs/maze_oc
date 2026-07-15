@@ -19,6 +19,7 @@ Write a complete, single-file Python game using Pygame that meets the following 
 - Movement speeds: player ~2.5 px/frame; enemies ~1.0–1.8 px/frame (base 1.4 ± variation)
 - When the player collides with any enemy car: both cars show a simple explosion effect, the player loses 1 life, both respawn elsewhere on open paths, and the player gets brief invulnerability (~1.5 s)
 - The player starts with 3 lives
+- Player spawn position is always at the farthest reachable tile from the exit (BFS distance), with ~15% noise (tiles within 85% of max distance are candidates); if the chosen tile is too close to an enemy, try another candidate from the same group
 - Display the remaining lives on screen (simple hearts or text)
 - When lives reach 0, show "GAME OVER" and allow restart with R key
 - There is an exit tile visible in the maze; when the player reaches it, show "YOU WIN!" and allow restart with R key
