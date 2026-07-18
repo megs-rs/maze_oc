@@ -1,6 +1,6 @@
 # Caça ao Labirinto
 
-Um jogo de labirinto 2D em visão superior feito com **Pygame** — sem assets externos.
+Um jogo de labirinto 2D em visão superior feito com **Pygame** — usa imagens JPG para os carrinhos.
 
 ## Como Executar
 
@@ -41,11 +41,11 @@ Requer Python 3 e Pygame (`pip install pygame`).
 |---------------|--------|---------------------------------------------------------------------------|
 | Preciso       | 1      | Perseguição BFS com ruído baixo; alto viés ao jogador quando vagando     |
 | Médio         | 2      | Perseguição BFS com ruído moderado; viés médio ao jogador quando vagando |
-| Segue-parede  | 3      | Travessia pela regra da mão direita — nunca usa BFS                       |
+| Segue-parede  | 3      | Regra da mão direita — mantém parede à direita; só decide ao atingir o centro do tile |
 
 - **Perseguição** ativa a ~550px+ do jogador; senão os inimigos **vagam**.
 - Inimigos atingidos por balas reaparecem em outro local.
-- Colidir com um inimigo custa 1 vida; reaparecimento com ~1,5s de invulnerabilidade.
+- Colidir com um inimigo custa 1 vida; reaparecimento com 3s de invulnerabilidade (pisca-pisca).
 
 ## Fases e Dificuldade
 
@@ -68,4 +68,4 @@ Requer Python 3 e Pygame (`pip install pygame`).
 - Labirinto baseado em grid (17×17) gerado novamente a cada fase (sem semente fixa).
 - Velocidade do jogador ~2,1 px/frame (sempre em movimento); inimigos ~1,0–1,8+ px/frame.
 - IA inimiga usa BFS no grid + direcionamento em nível de pixel para o centro dos tiles.
-- Implementação em arquivo único — única dependência é Pygame.
+- Implementação em arquivo único; dependências são Pygame e duas imagens JPG (jogador.jpg, inimigos.jpg).
