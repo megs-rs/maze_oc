@@ -715,7 +715,7 @@ def main():
     running = True
 
     def advance_phase():
-        nonlocal maze, walls, exit_rect, phase_timer, game_won, game_over
+        nonlocal maze, walls, exit_rect, phase_timer, game_won, game_over, invulnerable
         maze = generate_maze(GRID_COLS, GRID_ROWS)
         walls = get_wall_rects(maze)
         exit_x, exit_y = find_exit_pos(maze)
