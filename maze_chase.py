@@ -8,6 +8,7 @@ import pygame
 import random
 import math
 import sys
+import os
 from collections import deque
 
 pygame.init()
@@ -31,6 +32,8 @@ PATH = 0
 
 CAR_W = 26
 CAR_H = 18
+SPRITE_W = 39
+SPRITE_H = 27
 
 NUM_ENEMIES = 6
 INITIAL_LIVES = 3
@@ -43,7 +46,7 @@ ENEMY_NOISE = {'accurate': 0.05, 'medium': 0.30}
 ENEMY_BIAS = {'accurate': 0.50, 'medium': 0.25}
 ENEMY_CENTER_THRESHOLD = 6
 ENEMY_STUCK_SNAP = 8
-INVULNERABLE_TIME = 90
+INVULNERABLE_TIME = 180
 EXPLOSION_DURATION = 30
 SCORE_VALUES = {'wall': 100, 'medium': 200, 'accurate': 300}
 EXIT_SCORE_BASE = 500
@@ -81,6 +84,46 @@ DOWN = (0, 1)
 LEFT = (-1, 0)
 RIGHT = (1, 0)
 DIRECTIONS = [UP, DOWN, LEFT, RIGHT]
+
+# Sprites
+BG_THRESHOLD = 230
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def load_car_sprite(path, size=(SPRITE_W, SPRITE_H)):
+    img = pygame.image.load(path).convert_alpha()
+    img = pygame.transform.smoothscale(img, size)
+    w, h = img.get_size()
+    for x in range(w):
+        for y in range(h):
+            r, g, b, a = img.get_at((x, y))
+            if r > BG_THRESHOLD and g > BG_THRESHOLD and b > BG_THRESHOLD:
+                img.set_at((x, y), (0, 0, 0, 0))
+    sprites = {
+        UP: img,
+        DOWN: pygame.transform.rotate(img, 180),
+        LEFT: pygame.transform.rotate(img, 90),
+        RIGHT: pygame.transform.rotate(img, -90),
+    }
+    return sprites
+
+
+def tint_sprite(sprites, color):
+    tinted = {}
+    for direction, surf in sprites.items():
+        new_surf = surf.copy()
+        w, h = new_surf.get_size()
+        for x in range(w):
+            for y in range(h):
+                r, g, b, a = new_surf.get_at((x, y))
+                if a > 0:
+                    factor = 0.5
+                    nr = int(r * (1 - factor) + color[0] * factor)
+                    ng = int(g * (1 - factor) + color[1] * factor)
+                    nb = int(b * (1 - factor) + color[2] * factor)
+                    new_surf.set_at((x, y), (min(255, nr), min(255, ng), min(255, nb), a))
+        tinted[direction] = new_surf
+    return tinted
 
 
 def turn_right(d):
@@ -241,10 +284,10 @@ def tile_neighbors_at(maze, col, row):
 
 
 def choose_bfs_step(tile_neighbors, dist_map, col, row, noise):
-    """Pick a cardinal step using BFS distances, with optional random noise."""
+    """Pick a cardinal step using BFS distances, with optional random noise at junctions."""
     if not tile_neighbors:
         return None
-    if random.random() < noise:
+    if len(tile_neighbors) > 1 and random.random() < noise:
         return random.choice(tile_neighbors)
     best_list = []
     best_d = 9999
@@ -260,17 +303,21 @@ def choose_bfs_step(tile_neighbors, dist_map, col, row, noise):
     return random.choice(best_list) if best_list else random.choice(tile_neighbors)
 
 
+def is_path(maze, col, row):
+    return 0 <= col < GRID_COLS and 0 <= row < GRID_ROWS and maze[row][col] == PATH
+
+
 def wall_follower_direction(maze, col, row, direction):
-    """Right-hand rule on the grid: try right, forward, left, then back."""
+    """Right-hand rule: keep wall on your right side."""
     right = turn_right(direction)
-    forward = direction
     left = turn_left(direction)
-    back = (-direction[0], -direction[1])
-    for d in (right, forward, left, back):
-        nx, ny = col + d[0], row + d[1]
-        if 0 <= nx < GRID_COLS and 0 <= ny < GRID_ROWS and maze[ny][nx] == PATH:
-            return d
-    return direction
+    if not is_path(maze, col + right[0], row + right[1]):
+        if is_path(maze, col + direction[0], row + direction[1]):
+            return direction
+        if is_path(maze, col + left[0], row + left[1]):
+            return left
+        return (-direction[0], -direction[1])
+    return right
 
 
 def move_enemy_on_grid(enemy, walls, maze):
@@ -353,7 +400,7 @@ def move_player_on_grid(player, walls, maze):
 # ─── Car ─────────────────────────────────────────────────────────────────────
 
 class Car:
-    def __init__(self, x, y, color, is_player=False, behavior=None):
+    def __init__(self, x, y, color, is_player=False, behavior=None, sprites=None):
         self.x = x
         self.y = y
         self.color = color
@@ -369,6 +416,7 @@ class Car:
         self.move_dur = random.randint(30, 90)
         self.stuck_frames = 0
         self.target_tile = None
+        self.sprites = sprites
 
     def set_pos(self, x, y):
         self.x, self.y = x, y
@@ -399,6 +447,13 @@ class Car:
                 self.direction = DOWN if dy > 0 else UP
 
     def draw(self, screen):
+        if self.sprites:
+            sprite = self.sprites.get(self.direction)
+            if sprite:
+                sprite_rect = sprite.get_rect(center=(self.x, self.y))
+                screen.blit(sprite, sprite_rect)
+                return
+
         body = pygame.Rect(0, 0, CAR_W, CAR_H)
         body.center = (self.x, self.y)
         pygame.draw.rect(screen, self.color, body, border_radius=4)
@@ -514,6 +569,9 @@ def main():
     font = pygame.font.Font(None, 32)
     big_font = pygame.font.Font(None, 72)
 
+    player_sprites = load_car_sprite(os.path.join(SCRIPT_DIR, 'jogador.jpg'))
+    enemy_sprites = load_car_sprite(os.path.join(SCRIPT_DIR, 'inimigos.jpg'))
+
     # Generate maze
     maze = generate_maze(GRID_COLS, GRID_ROWS)
     walls = get_wall_rects(maze)
@@ -523,7 +581,7 @@ def main():
     exit_rect.center = (exit_x, exit_y)
 
     # Player
-    player = Car(0, 0, PLAYER_COLOR, is_player=True)
+    player = Car(0, 0, PLAYER_COLOR, is_player=True, sprites=player_sprites)
 
     def best_start_direction(px, py):
         col, row = pos_to_tile(px, py)
@@ -546,7 +604,7 @@ def main():
         far_col, far_row = farthest_path_tile(maze, exit_col, exit_row)
         x, y = tile_center(far_col, far_row)
         for e in enemies:
-            if math.hypot(x - e.x, y - e.y) < 120:
+            if math.hypot(x - e.x, y - e.y) < 180:
                 dist = bfs_distance(maze, exit_col, exit_row)
                 rows, cols = len(dist), len(dist[0])
                 max_d = max(dist[ri][ci] for ri in range(rows) for ci in range(cols) if dist[ri][ci] > 0)
@@ -555,7 +613,7 @@ def main():
                 random.shuffle(far)
                 for fc, fr in far:
                     tx, ty = tile_center(fc, fr)
-                    if all(math.hypot(tx - e.x, ty - e.y) >= 120 for e in enemies):
+                    if all(math.hypot(tx - e.x, ty - e.y) >= 180 for e in enemies):
                         x, y = tx, ty
                         break
                 break
@@ -564,6 +622,47 @@ def main():
 
     def spawn_enemy(enemy):
         enemy.target_tile = None
+        if enemy.behavior == 'wall':
+            exit_col, exit_row = pos_to_tile(exit_x, exit_y)
+            far_col, far_row = farthest_path_tile(maze, exit_col, exit_row)
+            x, y = tile_center(far_col, far_row)
+            for e in enemies:
+                if e is not enemy and math.hypot(x - e.x, y - e.y) < 60:
+                    dist = bfs_distance(maze, exit_col, exit_row)
+                    rows, cols = len(dist), len(dist[0])
+                    max_d = max(dist[ri][ci] for ri in range(rows) for ci in range(cols) if dist[ri][ci] > 0)
+                    threshold = max_d * 0.85
+                    far = [(ci, ri) for ri in range(rows) for ci in range(cols) if dist[ri][ci] >= threshold]
+                    random.shuffle(far)
+                    for fc, fr in far:
+                        tx, ty = tile_center(fc, fr)
+                        if all(math.hypot(tx - o.x, ty - o.y) >= 60 or o is enemy or o is e for o in enemies):
+                            x, y = tx, ty
+                            break
+                    break
+            enemy.set_pos(x, y)
+            col, row = pos_to_tile(x, y)
+            neighbors = tile_neighbors_at(maze, col, row)
+            enemy.direction = neighbors[0] if neighbors else random.choice(DIRECTIONS)
+            return
+        if enemy.behavior == 'medium':
+            exit_col, exit_row = pos_to_tile(exit_x, exit_y)
+            dist = bfs_distance(maze, exit_col, exit_row)
+            rows, cols = len(dist), len(dist[0])
+            max_d = max(dist[ri][ci] for ri in range(rows) for ci in range(cols) if dist[ri][ci] > 0)
+            target_d = max_d // 2
+            mid = [(ci, ri) for ri in range(rows) for ci in range(cols)
+                   if abs(dist[ri][ci] - target_d) <= 2 and maze[ri][ci] == PATH]
+            if mid:
+                random.shuffle(mid)
+                tx, ty = tile_center(mid[0][0], mid[0][1])
+            else:
+                tx, ty = random_path_pos(maze)
+            enemy.set_pos(tx, ty)
+            col, row = pos_to_tile(tx, ty)
+            neighbors = tile_neighbors_at(maze, col, row)
+            enemy.direction = neighbors[0] if neighbors else random.choice(DIRECTIONS)
+            return
         for _ in range(100):
             x, y = random_path_pos(maze)
             if math.hypot(x - player.x, y - player.y) < 120:
@@ -584,8 +683,9 @@ def main():
 
     enemy_behaviors = ['accurate', 'medium', 'medium', 'wall', 'wall', 'wall']
     enemies = [Car(0, 0, ENEMY_COLORS[i % len(ENEMY_COLORS)],
-                   behavior=enemy_behaviors[i])
-               for i in range(NUM_ENEMIES)]
+                   behavior=enemy_behaviors[i],
+                   sprites=tint_sprite(enemy_sprites, ENEMY_COLORS[i % len(ENEMY_COLORS)]))
+               for i in range(len(enemy_behaviors))]
 
     def apply_phase_difficulty():
         speed_mult = 1.0 + 0.15 * (phase - 1)
@@ -713,7 +813,8 @@ def main():
                     tile_neighbors = [enemy.direction]
 
                 if enemy.behavior == 'wall':
-                    enemy.direction = wall_follower_direction(maze, et_x, et_y, enemy.direction)
+                    if enemy.target_tile is None:
+                        enemy.direction = wall_follower_direction(maze, et_x, et_y, enemy.direction)
                 else:
                     dist = math.hypot(enemy.x - player.x, enemy.y - player.y)
                     noise = phase_noise if enemy.behavior == 'accurate' else phase_medium_noise
@@ -864,12 +965,6 @@ def main():
         hi_text = font.render(f"RECORDE {highscore}", True, (180, 180, 180))
         hi_rect = hi_text.get_rect(center=(SCREEN_WIDTH // 2, 42))
         screen.blit(hi_text, hi_rect)
-
-        if invulnerable > 0:
-            inv_text = font.render("─── INVULNERÁVEL ───", True, (255, 255, 100))
-            inv_rect = inv_text.get_rect(center=(SCREEN_WIDTH // 2,
-                                                  MAZE_OFFSET_Y + MAZE_HEIGHT + 20))
-            screen.blit(inv_text, inv_rect)
 
         if game_over:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
