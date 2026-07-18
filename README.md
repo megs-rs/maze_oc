@@ -53,7 +53,7 @@ Requer Python 3 e Pygame (`pip install pygame`).
 - Velocidade dos inimigos aumenta 15% por fase.
 - Ruído diminui (inimigos acertam mais o caminho).
 - Alcance de perseguição aumenta.
-- Ao completar uma fase, a próxima começa automaticamente em 10 segundos.
+- Ao completar uma fase, a próxima começa automaticamente em 10 segundos com invulnerabilidade.
 - **C** pula o countdown e avança para a próxima fase imediatamente.
 
 ## Vidas e Condição de Vitória
